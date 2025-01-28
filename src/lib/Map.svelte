@@ -125,7 +125,7 @@
     const colorRange = colorRanges[THEME] || colorRanges.population;
 
     //get geojson for current location
-		const geojson_url = '../src/ssd.geojson';
+		const geojson_url = 'ssd.geojson';
 		const response = await fetch(geojson_url);
 	  const geojson_data = await response.json();
 	  
