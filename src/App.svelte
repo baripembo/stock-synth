@@ -54,7 +54,6 @@
 
     // Play sound mapping if enabled
     if (playSound && data.length) {
-      console.log('am i here')
       await playDataSound();
     }
   }
@@ -167,7 +166,6 @@
   }
 
   function onBtnClick() {
-    console.log('btn clicked')
     playSound = true;
     playDataSound();
     animatePlayHead();
