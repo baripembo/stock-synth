@@ -9,7 +9,6 @@
   export let outputSize = 'compact';
   export let startDate = null;    // e.g. '2024-01-01'
   export let endDate   = null;    // e.g. '2024-06-30'
-  export let playSound = false;
   export let audioDuration = 30;  // total playback duration in seconds
 
   const apiKey       = 'IEW89S0LFSHPCFXN';
@@ -51,11 +50,6 @@
     }
 
     drawChart();
-
-    // Play sound mapping if enabled
-    if (playSound && data.length) {
-      await playDataSound();
-    }
   }
 
   function drawChart() {
@@ -133,8 +127,8 @@
     requestAnimationFrame(tick);
   }
 
-  async function playDataSound() {
-    console.log('playDataSound')
+  async function playData() {
+    console.log('playData')
     await Tone.start();
 
     // Create a continuous oscillator
@@ -163,12 +157,7 @@
 
     // Stop oscillator at end
     osc.stop(now + audioDuration);
-  }
-
-  function onBtnClick() {
-    playSound = true;
-    playDataSound();
-    animatePlayHead();
+    animatePlayHead(); 
   }
 
   // Initial load and redraw on prop change
@@ -177,7 +166,7 @@
 </script>
 
 <div style="margin-bottom: 10px;">
-  <button on:click={onBtnClick}>Play Sound</button>
+  <button on:click={playData}>Play Sound</button>
 </div>
 <svg bind:this={svg}></svg>
 
