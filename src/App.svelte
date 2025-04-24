@@ -1,180 +1,189 @@
 <script>
   import { onMount } from 'svelte';
-  import axios from 'axios';
-  import Papa from 'papaparse';
   import * as d3 from 'd3';
+  import * as Tone from 'tone/build/esm/index.js';
 
-  import HNOView from './lib/HNOView.svelte';
-  
-  let viewsData = [];
-  let detailsLoading = true;
-  let abortController;
 
-  let selectedTab = 1;
+  // Props
+  export let symbol = 'AAPL';
+  export let outputSize = 'compact';
+  export let startDate = null;    // e.g. '2024-01-01'
+  export let endDate   = null;    // e.g. '2024-06-30'
+  export let playSound = false;
+  export let audioDuration = 30;  // total playback duration in seconds
 
-  let selectedCountry = 'SSD';
+  const apiKey       = 'IEW89S0LFSHPCFXN';
+  const functionType = 'TIME_SERIES_DAILY';
+  const seriesKey    = 'Time Series (Daily)';
 
-  const base_url = 'https://hapi.humdata.org/api/v1/';
-  const app_indentifier = 'aGFwaS1kYXNoYm9hcmQ6ZXJpa2Eud2VpQHVuLm9yZw==';
-  const rateDelay = 0;
+  let data = [];
+  let svg;
+  let timeScale;
+  let chart;
+  let xScale;
 
-  const countries = [
-    { code: 'SSD', name: 'South Sudan' }
-  ];
+  // Load data, draw chart, then optionally play sound
+  async function loadAndDraw() {
+    // Fetch
 
-  const views = [
-    {name: 'Operational Presence', id: 'orgs', endpoint: `coordination-context/operational-presence?sector_code=WSH&admin_level=2`},
-    {name: 'Humanitarian Needs', id: 'hno', endpoint: `affected-people/humanitarian-needs?sector_code=WSH&population_status=INN&admin_level=2`},
-  ];
+    const url = 'aapl.json';//`https://www.alphavantage.co/query?function=${functionType}&symbol=${symbol}&outputsize=compact&apikey=${apiKey}`;
+    const json = await fetch(url).then(r => r.json());
+    const timeSeries = json[seriesKey];
+    if (!timeSeries) {
+      console.error('API error or rate limit:', json);
+      return;
+    }
 
-  async function fetchData(endpoint) {
-    try {
-      const response = await fetch(`${endpoint}&app_identifier=${app_indentifier}`, { signal: abortController.signal });
-      const text = await response.text();
-      return new Promise((resolve, reject) => {
-        Papa.parse(text, {
-          header: true,
-          complete: results => resolve(results.data),
-          error: err => reject(err)
-        });
-      });
-    } catch (error) {
-      if (error.name === 'AbortError') {
-        console.log('Fetch aborted');
-      } else {
-        throw error;
-      }
+    // Transform
+    data = Object.entries(timeSeries).map(([date, vals]) => ({
+      date:  new Date(date),
+      close: +vals['4. close']
+    })).sort((a, b) => a.date - b.date);
+
+    // Filter by date range
+    if (startDate) {
+      const start = new Date(startDate);
+      data = data.filter(d => d.date >= start);
+    }
+    if (endDate) {
+      const end = new Date(endDate);
+      data = data.filter(d => d.date <= end);
+    }
+
+    drawChart();
+
+    // Play sound mapping if enabled
+    if (playSound && data.length) {
+      console.log('am i here')
+      await playDataSound();
     }
   }
 
-  async function fetchDataWithRateLimit(endpoint, delay) {
-    await new Promise(resolve => setTimeout(resolve, delay));
-    return fetchData(endpoint);
+  function drawChart() {
+    const margin = { top: 20, right: 30, bottom: 30, left: 40 };
+    const width  = 800 - margin.left - margin.right;
+    const height = 400 - margin.top  - margin.bottom;
+
+    // Clear SVG
+    d3.select(svg).selectAll('*').remove();
+
+    xScale = d3.scaleTime()
+      .domain(d3.extent(data, d => d.date))
+      .range([0, width]);
+
+    const y = d3.scaleLinear()
+      .domain([d3.min(data, d => d.close), d3.max(data, d => d.close)])
+      .nice()
+      .range([height, 0]);
+
+    chart = d3.select(svg)
+      .attr('width', width + margin.left + margin.right)
+      .attr('height', height + margin.top + margin.bottom)
+      .append('g')
+      .attr('transform', `translate(${margin.left},${margin.top})`);
+
+    chart.append('g')
+      .attr('transform', `translate(0,${height})`)
+      .call(d3.axisBottom(xScale));
+
+    chart.append('g')
+      .call(d3.axisLeft(y));
+
+    chart.append('path')
+      .datum(data)
+      .attr('fill', 'none')
+      .attr('stroke', 'steelblue')
+      .attr('stroke-width', 1.5)
+      .attr('d', d3.line()
+        .x(d => xScale(d.date))
+        .y(d => y(d.close))
+      );
+
+    // Add play-head line at initial position
+    chart.append('line')
+      .attr('class', 'play-head')
+      .attr('x1', 0)
+      .attr('x2', 0)
+      .attr('y1', 0)
+      .attr('y2', height)
+      .attr('stroke', 'red')
+      .attr('stroke-width', 1);
+
+    // Prepare timeScale for animation
+    timeScale = d3.scaleTime()
+      .domain(d3.extent(data, d => d.date))
+      .range([0, audioDuration * 1000]); // ms
   }
 
-  function generateMetadataEndpoint(hdx_id) {
-    return `${base_url}metadata/resource?resource_hdx_id=${hdx_id}&output_format=csv&limit=100`;
-  }
+  function animatePlayHead() {
+    const start = Date.now();
+    const end   = start + audioDuration * 1000;
 
-  async function loadViewsData() {
-    viewsData = [];
-    let delay = 0;
-    for (let view of views) {
-      let data = [];
-      let offset = 0;
-      let fetchedData;
-      let endpoint = '';
-
-      //data pagination
-      do {
-        endpoint = `${base_url}${view.endpoint}&location_code=${selectedCountry}&offset=${offset}&output_format=csv&limit=10000`;
-        fetchedData = await fetchDataWithRateLimit(endpoint, delay);
-        data = data.concat(fetchedData);
-        offset += 10000;
-      } while (fetchedData.length >= 10000);
-
-      //if no data
-      if (data.length === 0) {
-        viewsData = [...viewsData, { id: view.id, data: null, metadata: null }];
-        continue;
-      }
-
-      //get metadata
-      const metadataEndpoint = generateMetadataEndpoint(data[0].resource_hdx_id);
-      const metadata = await fetchDataWithRateLimit(metadataEndpoint, delay + 100);
-
-      //console.log('---view endpoint', endpoint)
-      viewsData = [...viewsData, { id: view.id, data, metadata, endpoint }];
-
-      delay += rateDelay;
+    function tick() {
+      const now = Date.now();
+      const elapsed = now - start;
+      if (elapsed > audioDuration * 1000) return;
+      // Find corresponding date at elapsed
+      const currentDate = timeScale.invert(elapsed);
+      const xPos = xScale(currentDate);
+      chart.select('.play-head')
+        .attr('x1', xPos)
+        .attr('x2', xPos);
+      requestAnimationFrame(tick);
     }
+    requestAnimationFrame(tick);
   }
 
+  async function playDataSound() {
+    console.log('playDataSound')
+    await Tone.start();
 
-  function selectTab(index) {
-    selectedTab = index;
-  }
+    // Create a continuous oscillator
+    const osc = new Tone.Oscillator({ type: 'sine', frequency: 0 }).toDestination();
+    const now = Tone.now();
 
-  async function loadData() {
-    await loadViewsData();
-    detailsLoading = false;
-  }  
+    // Scales for mapping
+    const freqScale = d3.scaleLinear()
+      .domain(d3.extent(data, d => d.close))
+      .range([200, 800]);
 
+    const timeScale = d3.scaleTime()
+      .domain(d3.extent(data, d => d.date))
+      .range([0, audioDuration]);
 
-  function initTracking() {
-    //initialize mixpanel
-    var MIXPANEL_TOKEN = window.location.hostname=='ocha-dap.github.io'? '5cbf12bc9984628fb2c55a49daf32e74' : '99035923ee0a67880e6c05ab92b6cbc0';
-    mixpanel.init(MIXPANEL_TOKEN);
-    mixpanel.track('page view', {
-      'page title': document.title,
-      'page type': 'datavis'
+    // Initialize frequency at first data point
+    osc.frequency.value = freqScale(data[0].close);
+    osc.start(now);
+
+    // Schedule frequency ramps along timeline
+    data.forEach(d => {
+      const t = now + timeScale(d.date);
+      const f = freqScale(d.close);
+      osc.frequency.linearRampToValueAtTime(f, t);
     });
+
+    // Stop oscillator at end
+    osc.stop(now + audioDuration);
   }
 
-  onMount(async () => {
-    abortController = new AbortController();
-    loadData();
-    initTracking();
-  });
+  function onBtnClick() {
+    console.log('btn clicked')
+    playSound = true;
+    playDataSound();
+    animatePlayHead();
+  }
+
+  // Initial load and redraw on prop change
+  onMount(loadAndDraw);
+  $: if (svg) loadAndDraw();
 </script>
 
+<div style="margin-bottom: 10px;">
+  <button on:click={onBtnClick}>Play Timeline Sound</button>
+</div>
+<svg bind:this={svg}></svg>
 
-<main>
-  <header>
-    <a href='https://hdx-hapi.readthedocs.io/en/latest/' target='_blank'><img src='logo_hdx_hapi.png' alt='HDX HAPI' /></a>
-  </header>
-  
-  <h2 class='header'><strong>South Sudan:</strong> People in Need in Water Sanitation Hygiene Sector</h2>
-
-  <div class='tab-content'>
-    {#if detailsLoading}
-      <p class='no-data-msg'>Loading...</p>
-    {:else}
-      <HNOView {...viewsData[1]} orgData={viewsData[0].data} iso3={selectedCountry} />
-    {/if}
-  </div>
-</main>
-
-
-<style lang='scss'>
-  header {
-    display: flex;
-    flex-flow: row;
-    margin-top: 20px;
-  }
-  header img {
-    height: 30px;
-    margin-right: 30px;
-  }
-  header p {
-    margin-top: 0;
-    width: 60%;
-  }
-  h2.details {
-    margin-top: 5px;
-  }
-  .main-content  {
-    margin: 0;
-  }
-  select {
-    font-size: 20px;
-  }
-  .tab-content {
-    min-height: 621px;
-  }
-
-  @media (max-width: 768px) {
-    header {
-      flex-flow: column;
-      img {
-        height: 20px;
-      }
-      p {
-        width: 100%;
-      }
-    }
-    .select-wrapper {
-      margin-left: 20px;
-    }
-  }
+<style>
+  svg { width: 100%; height: auto; }
+  button { padding: 6px 12px; }
 </style>
