@@ -179,7 +179,7 @@
 </script>
 
 <div style="margin-bottom: 10px;">
-  <button on:click={onBtnClick}>Play Timeline Sound</button>
+  <button on:click={onBtnClick}>Play Sound</button>
 </div>
 <svg bind:this={svg}></svg>
 
