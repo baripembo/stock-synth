@@ -53,8 +53,10 @@
   }
 
   function drawChart() {
+    const svgElement = svg;
     const margin = { top: 20, right: 30, bottom: 30, left: 40 };
-    const width  = 800 - margin.left - margin.right;
+    const containerWidth = svgElement.parentElement.clientWidth;
+    const width = containerWidth - margin.left - margin.right;
     const height = 400 - margin.top  - margin.bottom;
 
     // Clear SVG
